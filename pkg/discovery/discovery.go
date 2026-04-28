@@ -25,6 +25,16 @@ type Cert struct {
 // DefaultRoot is the conventional Let's Encrypt directory on Linux.
 const DefaultRoot = "/etc/letsencrypt"
 
+// Entry is a single observation produced by ScanVerbose. Exactly one of Cert
+// or Error is informative: if Error is nil the entry was usable, otherwise
+// Cert.Domain still names the live/ subdirectory but Cert.CertPath may be
+// empty. Verbose output is intended for human-driven debugging, never for
+// metric emission.
+type Entry struct {
+	Cert  Cert
+	Error error
+}
+
 // Scan walks <root>/live/* and returns one Cert per directory that contains a
 // readable cert.pem. Symlinks are resolved so callers can stat the underlying
 // file directly. The result is sorted by Domain for deterministic output.
@@ -33,12 +43,30 @@ const DefaultRoot = "/etc/letsencrypt"
 // that callers can distinguish "no certificates yet" from "configuration is
 // broken".
 func Scan(root string) ([]Cert, error) {
+	entries, err := ScanVerbose(root)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Cert, 0, len(entries))
+	for _, e := range entries {
+		if e.Error != nil {
+			continue
+		}
+		out = append(out, e.Cert)
+	}
+	return out, nil
+}
+
+// ScanVerbose is the same walk as Scan but reports a per-entry result
+// (success or skip reason) for every name found under <root>/live. It is
+// intended for the debug subcommand and ad-hoc diagnostics.
+func ScanVerbose(root string) ([]Entry, error) {
 	if root == "" {
 		root = DefaultRoot
 	}
 
 	liveDir := filepath.Join(root, "live")
-	entries, err := os.ReadDir(liveDir)
+	dirEntries, err := os.ReadDir(liveDir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -46,17 +74,25 @@ func Scan(root string) ([]Cert, error) {
 		return nil, fmt.Errorf("read %s: %w", liveDir, err)
 	}
 
-	out := make([]Cert, 0, len(entries))
-	for _, e := range entries {
+	out := make([]Entry, 0, len(dirEntries))
+	for _, e := range dirEntries {
 		name := e.Name()
-		if name == "README" || name == "" {
+		if name == "" || name == "README" {
 			continue
 		}
-		// certbot creates real directories; some setups symlink the lineage
-		// itself, so accept either as long as cert.pem resolves.
+
+		entry := Entry{Cert: Cert{Domain: name}}
+
 		if !e.IsDir() {
 			info, statErr := os.Stat(filepath.Join(liveDir, name))
-			if statErr != nil || !info.IsDir() {
+			switch {
+			case statErr != nil:
+				entry.Error = fmt.Errorf("stat: %w", statErr)
+				out = append(out, entry)
+				continue
+			case !info.IsDir():
+				entry.Error = fmt.Errorf("not a directory")
+				out = append(out, entry)
 				continue
 			}
 		}
@@ -64,11 +100,14 @@ func Scan(root string) ([]Cert, error) {
 		certPath := filepath.Join(liveDir, name, "cert.pem")
 		resolved, rerr := filepath.EvalSymlinks(certPath)
 		if rerr != nil {
+			entry.Error = fmt.Errorf("resolve cert.pem: %w", rerr)
+			out = append(out, entry)
 			continue
 		}
-		out = append(out, Cert{Domain: name, CertPath: resolved})
+		entry.Cert.CertPath = resolved
+		out = append(out, entry)
 	}
 
-	sort.Slice(out, func(i, j int) bool { return out[i].Domain < out[j].Domain })
+	sort.Slice(out, func(i, j int) bool { return out[i].Cert.Domain < out[j].Cert.Domain })
 	return out, nil
 }

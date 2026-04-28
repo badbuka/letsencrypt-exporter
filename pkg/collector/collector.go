@@ -43,6 +43,12 @@ type Options struct {
 
 	// Now overrides the time source. Intended for tests.
 	Now func() time.Time
+
+	// Logger, if non-nil, is invoked for every scrape-time error
+	// (scanner failure or per-certificate parse failure). It is in
+	// addition to the letsencrypt_cert_read_errors_total counter and is
+	// meant to surface why metrics are missing in operator logs.
+	Logger func(format string, args ...any)
 }
 
 // Collector implements prometheus.Collector.
@@ -51,6 +57,7 @@ type Collector struct {
 	hostname string
 	scanner  func(string) ([]discovery.Cert, error)
 	now      func() time.Time
+	logf     func(format string, args ...any)
 
 	notAfter    *prometheus.Desc
 	notBefore   *prometheus.Desc
@@ -87,6 +94,10 @@ func New(opts Options) *Collector {
 	if now == nil {
 		now = time.Now
 	}
+	logf := opts.Logger
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
 
 	const ns = "letsencrypt"
 	hostLabels := prometheus.Labels{"hostname": host}
@@ -99,6 +110,7 @@ func New(opts Options) *Collector {
 		hostname: host,
 		scanner:  scanner,
 		now:      now,
+		logf:     logf,
 		notAfter: prometheus.NewDesc(
 			ns+"_cert_not_after_seconds",
 			"Certificate NotAfter expressed as seconds since the Unix epoch.",
@@ -157,12 +169,14 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 
 	certs, err := c.scanner(c.path)
 	if err != nil {
+		c.logf("scan %s: %v", c.path, err)
 		c.bumpReadErr("")
 	}
 
 	for _, cert := range certs {
 		parsed, perr := loadCertificate(cert.CertPath)
 		if perr != nil {
+			c.logf("parse domain=%q path=%q: %v", cert.Domain, cert.CertPath, perr)
 			c.bumpReadErr(cert.Domain)
 			continue
 		}

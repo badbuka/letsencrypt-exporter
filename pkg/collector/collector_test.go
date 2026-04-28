@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"fmt"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -107,5 +108,35 @@ func TestCollectorHandlesMissingRoot(t *testing.T) {
 	}
 	if got := testutil.CollectAndCount(c, "letsencrypt_exporter_last_scrape_timestamp_seconds"); got != 1 {
 		t.Errorf("scrape timestamp must always be emitted, got %d", got)
+	}
+}
+
+func TestCollectorLogsParseErrors(t *testing.T) {
+	root := t.TempDir()
+	domainDir := filepath.Join(root, "live", "broken.example.com")
+	if err := os.MkdirAll(domainDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(domainDir, "cert.pem"), []byte("not a pem"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var logs []string
+	c := New(Options{
+		Path:     root,
+		Hostname: "h",
+		Scanner:  discovery.Scan,
+		Logger: func(format string, args ...any) {
+			logs = append(logs, fmt.Sprintf(format, args...))
+		},
+	})
+	reg := prometheus.NewPedanticRegistry()
+	reg.MustRegister(c)
+
+	if got := testutil.CollectAndCount(c, "letsencrypt_cert_read_errors_total"); got != 1 {
+		t.Errorf("expected one read-error series, got %d", got)
+	}
+	if len(logs) == 0 || !strings.Contains(logs[0], "broken.example.com") {
+		t.Errorf("expected logger to fire with domain context, got %v", logs)
 	}
 }

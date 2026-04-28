@@ -69,6 +69,43 @@ Flags override environment variables, environment variables override defaults.
 - `GET /metrics` &mdash; Prometheus exposition
 - `GET /healthz` &mdash; liveness probe
 
+### Debugging
+
+If `letsencrypt_cert_read_errors_total` is climbing or no certificates show
+up at all, run a one-shot dump that lists every `live/<domain>` entry with
+the reason it was kept or skipped, plus parsed certificate details:
+
+```bash
+letsencrypt-exporter debug -letsencrypt-path /etc/letsencrypt
+```
+
+Sample output:
+
+```
+letsencrypt-exporter debug
+  root:     /etc/letsencrypt
+  hostname: edge-01
+  live dir: /etc/letsencrypt/live (mode=-rwx------)
+
+[OK]    example.com
+        path:       /etc/letsencrypt/archive/example.com/cert3.pem
+        cn:         example.com
+        issuer:     R3
+        not_before: 2026-04-10T00:00:00Z
+        not_after:  2026-07-09T00:00:00Z
+        expires_in: 1736h12m04s
+        sans:       [example.com www.example.com]
+
+[SKIP]  stale.example.com
+        reason: resolve cert.pem: lstat /etc/letsencrypt/live/stale.example.com/cert.pem: no such file or directory
+
+summary: ok=1 skipped=1 parse_errors=0 total=2
+```
+
+The running exporter logs the same scan / parse errors to stderr each scrape,
+so you can also `journalctl -u letsencrypt-exporter` (or `docker logs`) to
+spot the cause without restarting in debug mode.
+
 ### Scrape config
 
 ```yaml

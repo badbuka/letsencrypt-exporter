@@ -59,3 +59,50 @@ func TestScanMissingRoot(t *testing.T) {
 		t.Fatalf("expected empty result, got %#v", got)
 	}
 }
+
+func TestScanVerboseReportsSkips(t *testing.T) {
+	root := t.TempDir()
+	live := filepath.Join(root, "live")
+	if err := os.MkdirAll(live, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	good := filepath.Join(live, "good.example.com")
+	if err := os.MkdirAll(good, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(good, "cert.pem"), []byte("dummy"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(live, "missing-cert.example.com"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(live, "stray-file"), []byte("nope"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := ScanVerbose(root)
+	if err != nil {
+		t.Fatalf("ScanVerbose: %v", err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("expected 3 entries, got %d: %#v", len(entries), entries)
+	}
+
+	byDomain := map[string]Entry{}
+	for _, e := range entries {
+		byDomain[e.Cert.Domain] = e
+	}
+
+	if e := byDomain["good.example.com"]; e.Error != nil {
+		t.Errorf("good entry should have no error, got %v", e.Error)
+	}
+	if e := byDomain["missing-cert.example.com"]; e.Error == nil {
+		t.Errorf("missing-cert entry should have a resolve error")
+	}
+	if e := byDomain["stray-file"]; e.Error == nil {
+		t.Errorf("stray file should have a not-a-directory error")
+	}
+}

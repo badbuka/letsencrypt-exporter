@@ -4,6 +4,11 @@
 //
 // Configuration is read from environment variables (via envconfig) and may
 // be overridden by command-line flags. There is no JSON config file.
+//
+// Subcommands:
+//
+//	letsencrypt-exporter            # default: serve /metrics
+//	letsencrypt-exporter debug      # one-shot dump of what discovery sees
 package main
 
 import (
@@ -49,7 +54,12 @@ func loadConfig(args []string) (config, error) {
 }
 
 func main() {
-	cfg, err := loadConfig(os.Args[1:])
+	args := os.Args[1:]
+	if len(args) > 0 && args[0] == "debug" {
+		os.Exit(runDebug(args[1:], os.Stdout, os.Stderr))
+	}
+
+	cfg, err := loadConfig(args)
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
@@ -60,6 +70,9 @@ func main() {
 	collector.MustRegister(reg, collector.Options{
 		Path:     cfg.LetsencryptPath,
 		Hostname: cfg.Hostname,
+		Logger: func(format string, a ...any) {
+			log.Printf("collector: "+format, a...)
+		},
 	})
 
 	mux := http.NewServeMux()
