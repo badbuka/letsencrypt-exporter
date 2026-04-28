@@ -5,7 +5,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
-    -o /out/letsencrypt-exporter ./cmd/letsencrypt-exporter
+    -o /out/letsencrypt-exporter .
 
 # Stock certbot installs /etc/letsencrypt/{live,archive} with mode 0700 root:root.
 # cert.pem under live/ is a relative symlink into archive/, so the exporter needs

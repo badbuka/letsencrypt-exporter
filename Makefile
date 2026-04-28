@@ -6,7 +6,7 @@ PKG    := ./...
 all: lint test build
 
 build:
-	go build -trimpath -ldflags="-s -w" -o bin/$(BINARY) ./cmd/letsencrypt-exporter
+	go build -trimpath -ldflags="-s -w" -o bin/$(BINARY) .
 
 test:
 	go test -race -count=1 $(PKG)
