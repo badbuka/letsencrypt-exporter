@@ -27,18 +27,13 @@ running the exporter) and `domain` (the certbot lineage directory name).
 | `letsencrypt_cert_read_errors_total`                  | `hostname`, `domain`                  | Counter of read/parse failures per domain      |
 | `letsencrypt_exporter_last_scrape_timestamp_seconds`  | `hostname`                            | Wallclock of most recent scrape                |
 
-## Run as a binary
+## Run as a Docker image
 
-```bash
-go install github.com/badbuka/letsencrypt-exporter/cmd/letsencrypt-exporter@latest
-letsencrypt-exporter -letsencrypt-path /etc/letsencrypt -port 8622
-```
-
-Or via Docker — pre-built multi-arch images are published on Docker Hub at
+Via Docker — pre-built images are published on Docker Hub at
 [`badbuka/letsencrypt-exporter`](https://hub.docker.com/r/badbuka/letsencrypt-exporter):
 
 ```bash
-docker run --rm -p 8622:8622 \
+docker run -d --rm -p 8622:8622 \
   -v /etc/letsencrypt:/etc/letsencrypt:ro \
   badbuka/letsencrypt-exporter:latest
 ```
@@ -49,10 +44,18 @@ To build locally instead:
 
 ```bash
 docker build -t letsencrypt-exporter .
-docker run --rm -p 8622:8622 \
+docker run -d --rm -p 8622:8622 \
   -v /etc/letsencrypt:/etc/letsencrypt:ro \
   letsencrypt-exporter
 ```
+
+> **Permissions.** Stock certbot creates `/etc/letsencrypt/{live,archive}` with
+> mode `0700 root:root`, and `live/<domain>/cert.pem` is a relative symlink
+> into `archive/`, so the exporter needs read+execute on **both** directories.
+> The published image runs as root for that reason. If you tighten the host
+> permissions (dedicated group + `chmod g+rX`, or POSIX ACLs) you can drop
+> privileges via `docker run --user 65532:65532` or the equivalent
+> `User=`/`Group=` in your systemd unit.
 
 ### Configuration
 
