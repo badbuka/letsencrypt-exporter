@@ -34,7 +34,18 @@ go install github.com/badbuka/letsencrypt-exporter/cmd/letsencrypt-exporter@late
 letsencrypt-exporter -letsencrypt-path /etc/letsencrypt -port 8622
 ```
 
-Or via Docker:
+Or via Docker — pre-built multi-arch images are published on Docker Hub at
+[`badbuka/letsencrypt-exporter`](https://hub.docker.com/r/badbuka/letsencrypt-exporter):
+
+```bash
+docker run --rm -p 8622:8622 \
+  -v /etc/letsencrypt:/etc/letsencrypt:ro \
+  badbuka/letsencrypt-exporter:latest
+```
+
+Pin a specific release with the semver tag, e.g. `badbuka/letsencrypt-exporter:v1.0.0`.
+
+To build locally instead:
 
 ```bash
 docker build -t letsencrypt-exporter .
