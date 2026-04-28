@@ -28,9 +28,6 @@ linters:
   settings:
     gocyclo:
       min-complexity: 15
-    gocritic:
-      disabled-checks:
-        - ifElseChain
     gosec:
       excludes:
         - G104
