@@ -1,0 +1,227 @@
+// Package collector implements a prometheus.Collector that reports the
+// validity windows of every Let's Encrypt certificate found by the
+// discovery package.
+//
+// The collector is purely scrape-driven: every call to Collect re-runs
+// discovery and re-parses each cert.pem. There are no background goroutines
+// and no internal caches, which makes it trivial to embed in a host service
+// that already exposes a Prometheus registry.
+package collector
+
+import (
+	"crypto/x509"
+	"encoding/pem"
+	"fmt"
+	"os"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/badbuka/letsencrypt-exporter/pkg/discovery"
+)
+
+// Options configures a collector instance. The zero value is valid and
+// produces a collector that scans /etc/letsencrypt and labels metrics with
+// the local OS hostname.
+type Options struct {
+	// Path is the Let's Encrypt root directory. Defaults to
+	// discovery.DefaultRoot ("/etc/letsencrypt") when empty.
+	Path string
+
+	// Hostname is the value used for the "hostname" label. When empty the
+	// collector calls os.Hostname() once at construction time.
+	Hostname string
+
+	// ConstLabels are merged into every metric on top of the built-in
+	// {hostname,domain} pair. Useful for things like {"env":"prod"}.
+	ConstLabels prometheus.Labels
+
+	// Scanner overrides the default discovery.Scan. Intended for tests.
+	Scanner func(root string) ([]discovery.Cert, error)
+
+	// Now overrides the time source. Intended for tests.
+	Now func() time.Time
+}
+
+// Collector implements prometheus.Collector.
+type Collector struct {
+	path     string
+	hostname string
+	scanner  func(string) ([]discovery.Cert, error)
+	now      func() time.Time
+
+	notAfter    *prometheus.Desc
+	notBefore   *prometheus.Desc
+	expiresIn   *prometheus.Desc
+	info        *prometheus.Desc
+	scrapeTS    *prometheus.Desc
+	readErrDesc *prometheus.Desc
+
+	mu       sync.Mutex
+	readErrs map[string]float64
+}
+
+// New builds a Collector from opts.
+func New(opts Options) *Collector {
+	path := opts.Path
+	if path == "" {
+		path = discovery.DefaultRoot
+	}
+
+	host := opts.Hostname
+	if host == "" {
+		if h, err := os.Hostname(); err == nil {
+			host = h
+		} else {
+			host = "unknown"
+		}
+	}
+
+	scanner := opts.Scanner
+	if scanner == nil {
+		scanner = discovery.Scan
+	}
+	now := opts.Now
+	if now == nil {
+		now = time.Now
+	}
+
+	const ns = "letsencrypt"
+	hostLabels := prometheus.Labels{"hostname": host}
+	for k, v := range opts.ConstLabels {
+		hostLabels[k] = v
+	}
+
+	return &Collector{
+		path:     path,
+		hostname: host,
+		scanner:  scanner,
+		now:      now,
+		notAfter: prometheus.NewDesc(
+			ns+"_cert_not_after_seconds",
+			"Certificate NotAfter expressed as seconds since the Unix epoch.",
+			[]string{"domain"}, hostLabels,
+		),
+		notBefore: prometheus.NewDesc(
+			ns+"_cert_not_before_seconds",
+			"Certificate NotBefore expressed as seconds since the Unix epoch.",
+			[]string{"domain"}, hostLabels,
+		),
+		expiresIn: prometheus.NewDesc(
+			ns+"_cert_expires_in_seconds",
+			"Seconds until the certificate's NotAfter; negative once expired.",
+			[]string{"domain"}, hostLabels,
+		),
+		info: prometheus.NewDesc(
+			ns+"_cert_info",
+			"Constant 1 with descriptive certificate labels.",
+			[]string{"domain", "cn", "issuer", "serial", "sans"}, hostLabels,
+		),
+		scrapeTS: prometheus.NewDesc(
+			"letsencrypt_exporter_last_scrape_timestamp_seconds",
+			"Unix timestamp of the most recent scrape.",
+			nil, hostLabels,
+		),
+		readErrDesc: prometheus.NewDesc(
+			ns+"_cert_read_errors_total",
+			"Total number of errors encountered while reading or parsing a certificate file, by domain.",
+			[]string{"domain"}, hostLabels,
+		),
+		readErrs: make(map[string]float64),
+	}
+}
+
+// MustRegister is a convenience helper for callers that already manage a
+// registry. It panics if registration fails.
+func MustRegister(reg prometheus.Registerer, opts Options) *Collector {
+	c := New(opts)
+	reg.MustRegister(c)
+	return c
+}
+
+// Describe implements prometheus.Collector.
+func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
+	ch <- c.notAfter
+	ch <- c.notBefore
+	ch <- c.expiresIn
+	ch <- c.info
+	ch <- c.scrapeTS
+	ch <- c.readErrDesc
+}
+
+// Collect implements prometheus.Collector.
+func (c *Collector) Collect(ch chan<- prometheus.Metric) {
+	now := c.now()
+
+	certs, err := c.scanner(c.path)
+	if err != nil {
+		c.bumpReadErr("")
+	}
+
+	for _, cert := range certs {
+		parsed, perr := loadCertificate(cert.CertPath)
+		if perr != nil {
+			c.bumpReadErr(cert.Domain)
+			continue
+		}
+
+		ch <- prometheus.MustNewConstMetric(
+			c.notAfter, prometheus.GaugeValue,
+			float64(parsed.NotAfter.Unix()), cert.Domain,
+		)
+		ch <- prometheus.MustNewConstMetric(
+			c.notBefore, prometheus.GaugeValue,
+			float64(parsed.NotBefore.Unix()), cert.Domain,
+		)
+		ch <- prometheus.MustNewConstMetric(
+			c.expiresIn, prometheus.GaugeValue,
+			parsed.NotAfter.Sub(now).Seconds(), cert.Domain,
+		)
+		ch <- prometheus.MustNewConstMetric(
+			c.info, prometheus.GaugeValue, 1,
+			cert.Domain,
+			parsed.Subject.CommonName,
+			parsed.Issuer.CommonName,
+			parsed.SerialNumber.Text(16),
+			strings.Join(parsed.DNSNames, ","),
+		)
+	}
+
+	ch <- prometheus.MustNewConstMetric(
+		c.scrapeTS, prometheus.GaugeValue, float64(now.Unix()),
+	)
+
+	c.mu.Lock()
+	for domain, count := range c.readErrs {
+		ch <- prometheus.MustNewConstMetric(
+			c.readErrDesc, prometheus.CounterValue, count, domain,
+		)
+	}
+	c.mu.Unlock()
+}
+
+func (c *Collector) bumpReadErr(domain string) {
+	c.mu.Lock()
+	c.readErrs[domain]++
+	c.mu.Unlock()
+}
+
+func loadCertificate(path string) (*x509.Certificate, error) {
+	// path is supplied by discovery.Scan from the operator-configured root
+	// directory; reading it is the whole purpose of this exporter.
+	raw, err := os.ReadFile(path) //nolint:gosec // G304: see comment above
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	block, _ := pem.Decode(raw)
+	if block == nil {
+		return nil, fmt.Errorf("no PEM block in %s", path)
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	return cert, nil
+}
