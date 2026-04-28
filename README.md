@@ -1,5 +1,6 @@
 # letsencrypt-exporter
 [![Go Report Card](https://goreportcard.com/badge/github.com/badbuka/letsencrypt-exporter)](https://goreportcard.com/report/github.com/badbuka/letsencrypt-exporter)
+
 A Prometheus exporter and reusable Go library that auto-discovers Let's
 Encrypt certificates under `/etc/letsencrypt/live/*` and exposes their
 validity windows.
