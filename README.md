@@ -66,6 +66,7 @@ Flags override environment variables, environment variables override defaults.
 | `-letsencrypt-path`   | `LETSENCRYPT_PATH` | `/etc/letsencrypt` | Let's Encrypt root directory                 |
 | `-port`               | `PORT`             | `8622`             | TCP port for the HTTP server                 |
 | `-hostname`           | `HOSTNAME`         | `os.Hostname()`    | Override for the `hostname` metric label     |
+| `-debug`              | `DEBUG`            | `false`            | Enable standard Go and process runtime metrics |
 
 ### Endpoints
 

@@ -32,6 +32,7 @@ type config struct {
 	LetsencryptPath string `envconfig:"LETSENCRYPT_PATH" default:"/etc/letsencrypt"`
 	Port            int    `envconfig:"PORT"             default:"8622"`
 	Hostname        string `envconfig:"HOSTNAME"`
+	Debug           bool   `envconfig:"DEBUG"            default:"false"`
 }
 
 func loadConfig(args []string) (config, error) {
@@ -47,6 +48,8 @@ func loadConfig(args []string) (config, error) {
 		"TCP port for the HTTP server (env: PORT)")
 	fs.StringVar(&cfg.Hostname, "hostname", cfg.Hostname,
 		"Override for the hostname label; defaults to os.Hostname() (env: HOSTNAME)")
+	fs.BoolVar(&cfg.Debug, "debug", cfg.Debug,
+		"Enable debug mode (adds standard Go/process runtime metrics) (env: DEBUG)")
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
 	}
@@ -65,8 +68,10 @@ func main() {
 	}
 
 	reg := prometheus.NewRegistry()
-	reg.MustRegister(collectors.NewGoCollector())
-	reg.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	if cfg.Debug {
+		reg.MustRegister(collectors.NewGoCollector())
+		reg.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	}
 	collector.MustRegister(reg, collector.Options{
 		Path:     cfg.LetsencryptPath,
 		Hostname: cfg.Hostname,
