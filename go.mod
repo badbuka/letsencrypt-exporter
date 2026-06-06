@@ -1,6 +1,6 @@
 module github.com/badbuka/letsencrypt-exporter
 
-go 1.26.2
+go 1.26.4
 
 require (
 	github.com/kelseyhightower/envconfig v1.4.0
