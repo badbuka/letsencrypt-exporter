@@ -1,6 +1,5 @@
 // Package collector implements a prometheus.Collector that reports the
-// validity windows of every Let's Encrypt certificate found by the
-// discovery package.
+// validity windows of every certificate found by the discovery package.
 //
 // The collector is purely scrape-driven: every call to Collect re-runs
 // discovery and re-parses each cert.pem. There are no background goroutines
@@ -9,9 +8,6 @@
 package collector
 
 import (
-	"crypto/x509"
-	"encoding/pem"
-	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -19,6 +15,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	certpkg "github.com/badbuka/letsencrypt-exporter/pkg/cert"
 	"github.com/badbuka/letsencrypt-exporter/pkg/discovery"
 )
 
@@ -26,9 +23,15 @@ import (
 // produces a collector that scans /etc/letsencrypt and labels metrics with
 // the local OS hostname.
 type Options struct {
-	// Path is the Let's Encrypt root directory. Defaults to
+	// CertbotPath is the certbot root directory. Defaults to
 	// discovery.DefaultRoot ("/etc/letsencrypt") when empty.
-	Path string
+	CertbotPath string
+
+	// ExtraPaths lists explicit PEM files or directories to scan.
+	ExtraPaths []string
+
+	// RecursivePaths lists directories walked recursively for PEM files.
+	RecursivePaths []string
 
 	// Hostname is the value used for the "hostname" label. When empty the
 	// collector calls os.Hostname() once at construction time.
@@ -38,8 +41,8 @@ type Options struct {
 	// {hostname,domain} pair. Useful for things like {"env":"prod"}.
 	ConstLabels prometheus.Labels
 
-	// Scanner overrides the default discovery.Scan. Intended for tests.
-	Scanner func(root string) ([]discovery.Cert, error)
+	// Scanner overrides the default discovery.ScanAll. Intended for tests.
+	Scanner func(cfg discovery.Config) ([]discovery.Cert, error)
 
 	// Now overrides the time source. Intended for tests.
 	Now func() time.Time
@@ -53,9 +56,9 @@ type Options struct {
 
 // Collector implements prometheus.Collector.
 type Collector struct {
-	path     string
+	cfg      discovery.Config
 	hostname string
-	scanner  func(string) ([]discovery.Cert, error)
+	scanner  func(discovery.Config) ([]discovery.Cert, error)
 	now      func() time.Time
 	logf     func(format string, args ...any)
 
@@ -72,9 +75,9 @@ type Collector struct {
 
 // New builds a Collector from opts.
 func New(opts Options) *Collector {
-	path := opts.Path
-	if path == "" {
-		path = discovery.DefaultRoot
+	certbotPath := opts.CertbotPath
+	if certbotPath == "" {
+		certbotPath = discovery.DefaultRoot
 	}
 
 	host := opts.Hostname
@@ -86,9 +89,15 @@ func New(opts Options) *Collector {
 		}
 	}
 
+	cfg := discovery.Config{
+		CertbotRoot:    certbotPath,
+		Paths:          opts.ExtraPaths,
+		RecursiveRoots: opts.RecursivePaths,
+	}
+
 	scanner := opts.Scanner
 	if scanner == nil {
-		scanner = discovery.Scan
+		scanner = discovery.ScanAll
 	}
 	now := opts.Now
 	if now == nil {
@@ -106,7 +115,7 @@ func New(opts Options) *Collector {
 	}
 
 	return &Collector{
-		path:     path,
+		cfg:      cfg,
 		hostname: host,
 		scanner:  scanner,
 		now:      now,
@@ -167,35 +176,37 @@ func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	now := c.now()
 
-	certs, err := c.scanner(c.path)
+	certs, err := c.scanner(c.cfg)
 	if err != nil {
-		c.logf("scan %s: %v", c.path, err)
+		c.logf("scan: %v", err)
 		c.bumpReadErr("")
 	}
 
 	for _, cert := range certs {
-		parsed, perr := loadCertificate(cert.CertPath)
+		parsed, perr := certpkg.Load(cert.CertPath)
 		if perr != nil {
-			c.logf("parse domain=%q path=%q: %v", cert.Domain, cert.CertPath, perr)
-			c.bumpReadErr(cert.Domain)
+			c.logf("parse fallback_id=%q path=%q: %v", cert.FallbackID, cert.CertPath, perr)
+			c.bumpReadErr(cert.FallbackID)
 			continue
 		}
 
+		domain := certpkg.PrimaryDomain(parsed, cert.FallbackID)
+
 		ch <- prometheus.MustNewConstMetric(
 			c.notAfter, prometheus.GaugeValue,
-			float64(parsed.NotAfter.Unix()), cert.Domain,
+			float64(parsed.NotAfter.Unix()), domain,
 		)
 		ch <- prometheus.MustNewConstMetric(
 			c.notBefore, prometheus.GaugeValue,
-			float64(parsed.NotBefore.Unix()), cert.Domain,
+			float64(parsed.NotBefore.Unix()), domain,
 		)
 		ch <- prometheus.MustNewConstMetric(
 			c.expiresIn, prometheus.GaugeValue,
-			parsed.NotAfter.Sub(now).Seconds(), cert.Domain,
+			parsed.NotAfter.Sub(now).Seconds(), domain,
 		)
 		ch <- prometheus.MustNewConstMetric(
 			c.info, prometheus.GaugeValue, 1,
-			cert.Domain,
+			domain,
 			parsed.Subject.CommonName,
 			parsed.Issuer.CommonName,
 			parsed.SerialNumber.Text(16),
@@ -220,22 +231,4 @@ func (c *Collector) bumpReadErr(domain string) {
 	c.mu.Lock()
 	c.readErrs[domain]++
 	c.mu.Unlock()
-}
-
-func loadCertificate(path string) (*x509.Certificate, error) {
-	// path is supplied by discovery.Scan from the operator-configured root
-	// directory; reading it is the whole purpose of this exporter.
-	raw, err := os.ReadFile(path) //nolint:gosec // G304: see comment above
-	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", path, err)
-	}
-	block, _ := pem.Decode(raw)
-	if block == nil {
-		return nil, fmt.Errorf("no PEM block in %s", path)
-	}
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
-	}
-	return cert, nil
 }

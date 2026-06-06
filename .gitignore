@@ -3,3 +3,6 @@
 *.test
 *.out
 .DS_Store
+.cursor
+grafana/
+dash.json

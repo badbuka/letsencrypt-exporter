@@ -1,6 +1,5 @@
 // Command letsencrypt-exporter serves Prometheus metrics describing the
-// validity windows of every certificate found under a Let's Encrypt
-// directory tree.
+// validity windows of every certificate found under configured paths.
 //
 // Configuration is read from environment variables (via envconfig) and may
 // be overridden by command-line flags. There is no JSON config file.
@@ -18,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/kelseyhightower/envconfig"
@@ -29,10 +29,12 @@ import (
 )
 
 type config struct {
-	LetsencryptPath string `envconfig:"LETSENCRYPT_PATH" default:"/etc/letsencrypt"`
-	Port            int    `envconfig:"PORT"             default:"8622"`
-	Hostname        string `envconfig:"HOSTNAME"`
-	Debug           bool   `envconfig:"DEBUG"            default:"false"`
+	LetsencryptPath    string `envconfig:"LETSENCRYPT_PATH"       default:"/etc/letsencrypt"`
+	CertPaths          string `envconfig:"CERT_PATHS"             default:""`
+	CertRecursivePaths string `envconfig:"CERT_RECURSIVE_PATHS"   default:""`
+	Port               int    `envconfig:"PORT"                   default:"8622"`
+	Hostname           string `envconfig:"HOSTNAME"`
+	Debug              bool   `envconfig:"DEBUG"                  default:"false"`
 }
 
 func loadConfig(args []string) (config, error) {
@@ -43,7 +45,11 @@ func loadConfig(args []string) (config, error) {
 
 	fs := flag.NewFlagSet("letsencrypt-exporter", flag.ContinueOnError)
 	fs.StringVar(&cfg.LetsencryptPath, "letsencrypt-path", cfg.LetsencryptPath,
-		"Path to the Let's Encrypt root directory (env: LETSENCRYPT_PATH)")
+		"Path to the Let's Encrypt / certbot root directory (env: LETSENCRYPT_PATH)")
+	fs.StringVar(&cfg.CertPaths, "cert-paths", cfg.CertPaths,
+		"Comma-separated PEM files or directories to scan (env: CERT_PATHS)")
+	fs.StringVar(&cfg.CertRecursivePaths, "cert-recursive-paths", cfg.CertRecursivePaths,
+		"Comma-separated roots for recursive PEM walk (env: CERT_RECURSIVE_PATHS)")
 	fs.IntVar(&cfg.Port, "port", cfg.Port,
 		"TCP port for the HTTP server (env: PORT)")
 	fs.StringVar(&cfg.Hostname, "hostname", cfg.Hostname,
@@ -54,6 +60,21 @@ func loadConfig(args []string) (config, error) {
 		return cfg, err
 	}
 	return cfg, nil
+}
+
+func parseList(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func main() {
@@ -67,14 +88,19 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 
+	extraPaths := parseList(cfg.CertPaths)
+	recursivePaths := parseList(cfg.CertRecursivePaths)
+
 	reg := prometheus.NewRegistry()
 	if cfg.Debug {
 		reg.MustRegister(collectors.NewGoCollector())
 		reg.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	}
 	collector.MustRegister(reg, collector.Options{
-		Path:     cfg.LetsencryptPath,
-		Hostname: cfg.Hostname,
+		CertbotPath:    cfg.LetsencryptPath,
+		ExtraPaths:     extraPaths,
+		RecursivePaths: recursivePaths,
+		Hostname:       cfg.Hostname,
 		Logger: func(format string, a ...any) {
 			log.Printf("collector: "+format, a...)
 		},
@@ -104,7 +130,8 @@ func main() {
 		IdleTimeout:       30 * time.Second,
 	}
 
-	log.Printf("letsencrypt-exporter listening on %s, scanning %s", addr, cfg.LetsencryptPath)
+	log.Printf("letsencrypt-exporter listening on %s, certbot=%s extra=%d recursive=%d",
+		addr, cfg.LetsencryptPath, len(extraPaths), len(recursivePaths))
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatalf("http server: %v", err)
 	}

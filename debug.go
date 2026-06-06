@@ -1,8 +1,6 @@
 package main
 
 import (
-	"crypto/x509"
-	"encoding/pem"
 	"flag"
 	"fmt"
 	"io"
@@ -10,46 +8,63 @@ import (
 	"path/filepath"
 	"time"
 
+	certpkg "github.com/badbuka/letsencrypt-exporter/pkg/cert"
 	"github.com/badbuka/letsencrypt-exporter/pkg/discovery"
 )
 
 // runDebug performs a one-shot dump of what discovery sees under the
-// configured Let's Encrypt root and why each entry was kept or skipped. It
-// returns a process exit code so main can call os.Exit directly.
+// configured certificate roots and why each entry was kept or skipped.
 func runDebug(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("debug", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	path := fs.String("letsencrypt-path", envOrDefault("LETSENCRYPT_PATH", discovery.DefaultRoot),
-		"Path to the Let's Encrypt root directory (env: LETSENCRYPT_PATH)")
+		"Path to the Let's Encrypt / certbot root directory (env: LETSENCRYPT_PATH)")
+	certPaths := fs.String("cert-paths", envOrDefault("CERT_PATHS", ""),
+		"Comma-separated PEM files or directories to scan (env: CERT_PATHS)")
+	recursivePaths := fs.String("cert-recursive-paths", envOrDefault("CERT_RECURSIVE_PATHS", ""),
+		"Comma-separated roots for recursive PEM walk (env: CERT_RECURSIVE_PATHS)")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+
+	cfg := discovery.Config{
+		CertbotRoot:    *path,
+		Paths:          parseList(*certPaths),
+		RecursiveRoots: parseList(*recursivePaths),
 	}
 
 	out := &errWriter{w: stdout}
 	errOut := &errWriter{w: stderr}
 
 	out.printf("letsencrypt-exporter debug\n")
-	out.printf("  root:     %s\n", *path)
+	out.printf("  certbot root:     %s\n", cfg.CertbotRoot)
+	out.printf("  extra paths:      %d\n", len(cfg.Paths))
+	for _, p := range cfg.Paths {
+		out.printf("    - %s\n", p)
+	}
+	out.printf("  recursive roots:  %d\n", len(cfg.RecursiveRoots))
+	for _, p := range cfg.RecursiveRoots {
+		out.printf("    - %s\n", p)
+	}
 
 	host, _ := os.Hostname()
 	out.printf("  hostname: %s\n", host)
 
-	live := filepath.Join(*path, "live")
+	live := filepath.Join(cfg.CertbotRoot, "live")
 	if info, err := os.Stat(live); err != nil {
-		out.printf("  live dir: %s -> ERROR %v\n", live, err)
-		return finalize(out, errOut, 1)
+		out.printf("  live dir: %s -> %v\n", live, err)
 	} else {
 		out.printf("  live dir: %s (mode=%v)\n", live, info.Mode().Perm())
 	}
 	out.println()
 
-	entries, err := discovery.ScanVerbose(*path)
+	entries, err := discovery.ScanAllVerbose(cfg)
 	if err != nil {
 		errOut.printf("scan failed: %v\n", err)
 		return finalize(out, errOut, 1)
 	}
 	if len(entries) == 0 {
-		out.println("no entries found under live/")
+		out.println("no certificate entries found")
 		return finalize(out, errOut, 0)
 	}
 
@@ -57,26 +72,28 @@ func runDebug(args []string, stdout, stderr io.Writer) int {
 	for _, e := range entries {
 		if e.Error != nil {
 			skipped++
-			out.printf("[SKIP]  %s\n        reason: %v\n\n", e.Cert.Domain, e.Error)
+			out.printf("[SKIP]  %s\n        reason: %v\n\n", e.Cert.FallbackID, e.Error)
 			continue
 		}
-		cert, perr := loadCertForDebug(e.Cert.CertPath)
+		parsed, perr := certpkg.Load(e.Cert.CertPath)
 		if perr != nil {
 			parseFail++
 			out.printf("[PARSE-ERR] %s\n            path:   %s\n            error:  %v\n\n",
-				e.Cert.Domain, e.Cert.CertPath, perr)
+				e.Cert.FallbackID, e.Cert.CertPath, perr)
 			continue
 		}
+		domain := certpkg.PrimaryDomain(parsed, e.Cert.FallbackID)
 		ok++
-		out.printf("[OK]    %s\n", e.Cert.Domain)
-		out.printf("        path:       %s\n", e.Cert.CertPath)
-		out.printf("        cn:         %s\n", cert.Subject.CommonName)
-		out.printf("        issuer:     %s\n", cert.Issuer.CommonName)
-		out.printf("        not_before: %s\n", cert.NotBefore.UTC().Format(time.RFC3339))
-		out.printf("        not_after:  %s\n", cert.NotAfter.UTC().Format(time.RFC3339))
-		out.printf("        expires_in: %s\n", time.Until(cert.NotAfter).Round(time.Second))
-		if len(cert.DNSNames) > 0 {
-			out.printf("        sans:       %v\n", cert.DNSNames)
+		out.printf("[OK]    %s\n", domain)
+		out.printf("        fallback_id: %s\n", e.Cert.FallbackID)
+		out.printf("        path:        %s\n", e.Cert.CertPath)
+		out.printf("        cn:          %s\n", parsed.Subject.CommonName)
+		out.printf("        issuer:      %s\n", parsed.Issuer.CommonName)
+		out.printf("        not_before:  %s\n", parsed.NotBefore.UTC().Format(time.RFC3339))
+		out.printf("        not_after:   %s\n", parsed.NotAfter.UTC().Format(time.RFC3339))
+		out.printf("        expires_in:  %s\n", time.Until(parsed.NotAfter).Round(time.Second))
+		if len(parsed.DNSNames) > 0 {
+			out.printf("        sans:        %v\n", parsed.DNSNames)
 		}
 		out.println()
 	}
@@ -106,29 +123,6 @@ func envOrDefault(key, def string) string {
 		return v
 	}
 	return def
-}
-
-func loadCertForDebug(path string) (*x509.Certificate, error) {
-	raw, err := os.ReadFile(path) //nolint:gosec // G304: same justification as collector.loadCertificate
-	if err != nil {
-		return nil, fmt.Errorf("read: %w", err)
-	}
-	block, _ := pem.Decode(raw)
-	if block == nil {
-		return nil, fmt.Errorf("no PEM block in file (size=%d bytes, first 32: %q)", len(raw), firstN(raw, 32))
-	}
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("x509: %w", err)
-	}
-	return cert, nil
-}
-
-func firstN(b []byte, n int) []byte {
-	if len(b) < n {
-		return b
-	}
-	return b[:n]
 }
 
 // errWriter is a tiny io.Writer wrapper that captures the first write error

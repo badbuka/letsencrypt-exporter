@@ -1,14 +1,7 @@
 package collector
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
 	"fmt"
-	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,44 +11,13 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
-	"github.com/badbuka/letsencrypt-exporter/pkg/discovery"
+	"github.com/badbuka/letsencrypt-exporter/pkg/cert"
 )
-
-func writeCert(t *testing.T, path string, notAfter time.Time, dnsNames []string) {
-	t.Helper()
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tpl := &x509.Certificate{
-		SerialNumber: big.NewInt(42),
-		Subject:      pkix.Name{CommonName: dnsNames[0]},
-		Issuer:       pkix.Name{CommonName: "Test CA"},
-		NotBefore:    notAfter.Add(-90 * 24 * time.Hour),
-		NotAfter:     notAfter,
-		DNSNames:     dnsNames,
-	}
-	der, err := x509.CreateCertificate(rand.Reader, tpl, tpl, &priv.PublicKey, priv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	f, err := os.Create(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	if err := pem.Encode(f, &pem.Block{Type: "CERTIFICATE", Bytes: der}); err != nil {
-		t.Fatal(err)
-	}
-}
 
 func TestCollectorMetrics(t *testing.T) {
 	root := t.TempDir()
 	notAfter := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
-	writeCert(t,
+	cert.WriteTestCert(t,
 		filepath.Join(root, "live", "example.com", "cert.pem"),
 		notAfter,
 		[]string{"example.com", "www.example.com"},
@@ -64,10 +26,9 @@ func TestCollectorMetrics(t *testing.T) {
 	now := time.Date(2029, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	c := New(Options{
-		Path:     root,
-		Hostname: "edge-01",
-		Now:      func() time.Time { return now },
-		Scanner:  discovery.Scan,
+		CertbotPath: root,
+		Hostname:    "edge-01",
+		Now:         func() time.Time { return now },
 	})
 
 	reg := prometheus.NewPedanticRegistry()
@@ -96,10 +57,60 @@ letsencrypt_cert_expires_in_seconds{domain="example.com",hostname="edge-01"} 3.1
 	}
 }
 
+func TestCollectorDomainFromFirstSAN(t *testing.T) {
+	root := t.TempDir()
+	notAfter := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	cert.WriteTestCert(t,
+		filepath.Join(root, "live", "example.com", "cert.pem"),
+		notAfter,
+		[]string{"www.example.com", "example.com"},
+	)
+
+	c := New(Options{
+		CertbotPath: root,
+		Hostname:    "edge-01",
+	})
+	reg := prometheus.NewPedanticRegistry()
+	reg.MustRegister(c)
+
+	expected := `
+# HELP letsencrypt_cert_not_after_seconds Certificate NotAfter expressed as seconds since the Unix epoch.
+# TYPE letsencrypt_cert_not_after_seconds gauge
+letsencrypt_cert_not_after_seconds{domain="www.example.com",hostname="edge-01"} 1.893456e+09
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(expected), "letsencrypt_cert_not_after_seconds"); err != nil {
+		t.Fatalf("domain should come from first SAN: %v", err)
+	}
+}
+
+func TestCollectorFlatPEMPath(t *testing.T) {
+	root := t.TempDir()
+	notAfter := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	pemPath := filepath.Join(root, "custom.pem")
+	cert.WriteTestCert(t, pemPath, notAfter, []string{"custom.example.com"})
+
+	c := New(Options{
+		CertbotPath: filepath.Join(t.TempDir(), "missing"),
+		ExtraPaths:  []string{pemPath},
+		Hostname:    "edge-01",
+	})
+	reg := prometheus.NewPedanticRegistry()
+	reg.MustRegister(c)
+
+	expected := `
+# HELP letsencrypt_cert_not_after_seconds Certificate NotAfter expressed as seconds since the Unix epoch.
+# TYPE letsencrypt_cert_not_after_seconds gauge
+letsencrypt_cert_not_after_seconds{domain="custom.example.com",hostname="edge-01"} 1.893456e+09
+`
+	if err := testutil.GatherAndCompare(reg, strings.NewReader(expected), "letsencrypt_cert_not_after_seconds"); err != nil {
+		t.Fatalf("flat PEM path mismatch: %v", err)
+	}
+}
+
 func TestCollectorHandlesMissingRoot(t *testing.T) {
 	c := New(Options{
-		Path:     filepath.Join(t.TempDir(), "missing"),
-		Hostname: "h",
+		CertbotPath: filepath.Join(t.TempDir(), "missing"),
+		Hostname:    "h",
 	})
 	reg := prometheus.NewPedanticRegistry()
 	reg.MustRegister(c)
@@ -123,9 +134,8 @@ func TestCollectorLogsParseErrors(t *testing.T) {
 
 	var logs []string
 	c := New(Options{
-		Path:     root,
-		Hostname: "h",
-		Scanner:  discovery.Scan,
+		CertbotPath: root,
+		Hostname:    "h",
 		Logger: func(format string, args ...any) {
 			logs = append(logs, fmt.Sprintf(format, args...))
 		},
@@ -137,6 +147,6 @@ func TestCollectorLogsParseErrors(t *testing.T) {
 		t.Errorf("expected one read-error series, got %d", got)
 	}
 	if len(logs) == 0 || !strings.Contains(logs[0], "broken.example.com") {
-		t.Errorf("expected logger to fire with domain context, got %v", logs)
+		t.Errorf("expected logger to fire with fallback id context, got %v", logs)
 	}
 }

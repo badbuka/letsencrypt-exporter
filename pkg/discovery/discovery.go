@@ -1,5 +1,5 @@
-// Package discovery scans a Let's Encrypt directory tree and returns the set
-// of certificates that should be monitored.
+// Package discovery scans certificate locations and returns the set of
+// certificates that should be monitored.
 //
 // It deliberately knows nothing about Prometheus so it can be reused by
 // arbitrary tooling (alerting CLIs, ad-hoc reports, tests).
@@ -7,43 +7,54 @@ package discovery
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 )
 
-// Cert describes a single certificate lineage discovered under a Let's Encrypt
-// root directory.
+// Cert describes a single certificate discovered on disk.
 type Cert struct {
-	// Domain is the name of the live/<domain> directory. Certbot uses this as
-	// the lineage identifier; it is the most stable label for metrics.
-	Domain string
-	// CertPath is the absolute, symlink-resolved path to cert.pem.
+	// CertPath is the absolute, symlink-resolved path to the PEM file.
 	CertPath string
+	// FallbackID is the certbot lineage directory name, PEM basename, or
+	// another filesystem identifier used when the certificate carries no
+	// DNS names or common name.
+	FallbackID string
 }
 
 // DefaultRoot is the conventional Let's Encrypt directory on Linux.
 const DefaultRoot = "/etc/letsencrypt"
 
-// Entry is a single observation produced by ScanVerbose. Exactly one of Cert
-// or Error is informative: if Error is nil the entry was usable, otherwise
-// Cert.Domain still names the live/ subdirectory but Cert.CertPath may be
-// empty. Verbose output is intended for human-driven debugging, never for
-// metric emission.
+// Config selects which discovery sources to run.
+type Config struct {
+	// CertbotRoot is the certbot root directory (<root>/live/*). Empty skips
+	// the certbot scan.
+	CertbotRoot string
+	// Paths lists explicit PEM files or directories to scan (non-recursive).
+	Paths []string
+	// RecursiveRoots lists directories walked recursively for PEM files.
+	RecursiveRoots []string
+}
+
+// Entry is a single observation produced by ScanAllVerbose. If Error is nil
+// the entry was usable; otherwise Cert.FallbackID still names the source but
+// Cert.CertPath may be empty.
 type Entry struct {
 	Cert  Cert
 	Error error
 }
 
-// Scan walks <root>/live/* and returns one Cert per directory that contains a
-// readable cert.pem. Symlinks are resolved so callers can stat the underlying
-// file directly. The result is sorted by Domain for deterministic output.
-//
-// If <root>/live does not exist, Scan returns an empty slice and no error so
-// that callers can distinguish "no certificates yet" from "configuration is
-// broken".
+// Scan walks <root>/live/* via ScanAll for library backward compatibility.
 func Scan(root string) ([]Cert, error) {
-	entries, err := ScanVerbose(root)
+	return ScanAll(Config{CertbotRoot: root})
+}
+
+// ScanVerbose is ScanAllVerbose for a single certbot root.
+func ScanVerbose(root string) ([]Entry, error) {
+	return ScanAllVerbose(Config{CertbotRoot: root})
+}
+
+// ScanAll merges certificates from all enabled discovery sources.
+func ScanAll(cfg Config) ([]Cert, error) {
+	entries, err := ScanAllVerbose(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -57,57 +68,56 @@ func Scan(root string) ([]Cert, error) {
 	return out, nil
 }
 
-// ScanVerbose is the same walk as Scan but reports a per-entry result
-// (success or skip reason) for every name found under <root>/live. It is
-// intended for the debug subcommand and ad-hoc diagnostics.
-func ScanVerbose(root string) ([]Entry, error) {
-	if root == "" {
-		root = DefaultRoot
-	}
+// ScanAllVerbose runs every enabled scanner and reports per-entry results.
+func ScanAllVerbose(cfg Config) ([]Entry, error) {
+	var out []Entry
 
-	liveDir := filepath.Join(root, "live")
-	dirEntries, err := os.ReadDir(liveDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
+	if cfg.CertbotRoot != "" {
+		entries, err := scanCertbotVerbose(cfg.CertbotRoot)
+		if err != nil {
+			return nil, err
 		}
-		return nil, fmt.Errorf("read %s: %w", liveDir, err)
+		out = append(out, entries...)
 	}
 
-	out := make([]Entry, 0, len(dirEntries))
-	for _, e := range dirEntries {
-		name := e.Name()
-		if name == "" || name == "README" {
+	for _, p := range cfg.Paths {
+		entries, err := scanPathsVerbose([]string{p})
+		if err != nil {
+			return nil, fmt.Errorf("scan path %q: %w", p, err)
+		}
+		out = append(out, entries...)
+	}
+
+	for _, root := range cfg.RecursiveRoots {
+		entries, err := scanRecursiveVerbose([]string{root})
+		if err != nil {
+			return nil, fmt.Errorf("scan recursive %q: %w", root, err)
+		}
+		out = append(out, entries...)
+	}
+
+	return mergeEntries(out), nil
+}
+
+func mergeEntries(entries []Entry) []Entry {
+	seen := make(map[string]struct{}, len(entries))
+	out := make([]Entry, 0, len(entries))
+	for _, e := range entries {
+		if e.Error != nil || e.Cert.CertPath == "" {
+			out = append(out, e)
 			continue
 		}
-
-		entry := Entry{Cert: Cert{Domain: name}}
-
-		if !e.IsDir() {
-			info, statErr := os.Stat(filepath.Join(liveDir, name))
-			switch {
-			case statErr != nil:
-				entry.Error = fmt.Errorf("stat: %w", statErr)
-				out = append(out, entry)
-				continue
-			case !info.IsDir():
-				entry.Error = fmt.Errorf("not a directory")
-				out = append(out, entry)
-				continue
-			}
-		}
-
-		certPath := filepath.Join(liveDir, name, "cert.pem")
-		resolved, rerr := filepath.EvalSymlinks(certPath)
-		if rerr != nil {
-			entry.Error = fmt.Errorf("resolve cert.pem: %w", rerr)
-			out = append(out, entry)
+		if _, ok := seen[e.Cert.CertPath]; ok {
 			continue
 		}
-		entry.Cert.CertPath = resolved
-		out = append(out, entry)
+		seen[e.Cert.CertPath] = struct{}{}
+		out = append(out, e)
 	}
-
-	sort.Slice(out, func(i, j int) bool { return out[i].Cert.Domain < out[j].Cert.Domain })
-	return out, nil
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Cert.FallbackID != out[j].Cert.FallbackID {
+			return out[i].Cert.FallbackID < out[j].Cert.FallbackID
+		}
+		return out[i].Cert.CertPath < out[j].Cert.CertPath
+	})
+	return out
 }
