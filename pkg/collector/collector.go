@@ -47,10 +47,15 @@ type Options struct {
 	// Now overrides the time source. Intended for tests.
 	Now func() time.Time
 
+	// Debug enables per-scrape discovery logs for CERT_PATHS and
+	// CERT_RECURSIVE_PATHS scans.
+	Debug bool
+
 	// Logger, if non-nil, is invoked for every scrape-time error
 	// (scanner failure or per-certificate parse failure). It is in
 	// addition to the letsencrypt_cert_read_errors_total counter and is
-	// meant to surface why metrics are missing in operator logs.
+	// meant to surface why metrics are missing in operator logs. When Debug
+	// is true, extra and recursive path scan details are also logged.
 	Logger func(format string, args ...any)
 }
 
@@ -58,9 +63,11 @@ type Options struct {
 type Collector struct {
 	cfg      discovery.Config
 	hostname string
-	scanner  func(discovery.Config) ([]discovery.Cert, error)
-	now      func() time.Time
-	logf     func(format string, args ...any)
+	scanner          func(discovery.Config) ([]discovery.Cert, error)
+	scannerIsDefault bool
+	debug            bool
+	now              func() time.Time
+	logf             func(format string, args ...any)
 
 	notAfter    *prometheus.Desc
 	notBefore   *prometheus.Desc
@@ -96,6 +103,7 @@ func New(opts Options) *Collector {
 	}
 
 	scanner := opts.Scanner
+	scannerIsDefault := scanner == nil
 	if scanner == nil {
 		scanner = discovery.ScanAll
 	}
@@ -117,9 +125,11 @@ func New(opts Options) *Collector {
 	return &Collector{
 		cfg:      cfg,
 		hostname: host,
-		scanner:  scanner,
-		now:      now,
-		logf:     logf,
+		scanner:          scanner,
+		scannerIsDefault: scannerIsDefault,
+		debug:            opts.Debug,
+		now:              now,
+		logf:             logf,
 		notAfter: prometheus.NewDesc(
 			ns+"_cert_not_after_seconds",
 			"Certificate NotAfter expressed as seconds since the Unix epoch.",
@@ -176,7 +186,7 @@ func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
 func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	now := c.now()
 
-	certs, err := c.scanner(c.cfg)
+	certs, err := c.discoverCerts()
 	if err != nil {
 		c.logf("scan: %v", err)
 		c.bumpReadErr("")
@@ -227,6 +237,32 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 		)
 	}
 	c.mu.Unlock()
+}
+
+func (c *Collector) discoverCerts() ([]discovery.Cert, error) {
+	if !c.scannerIsDefault {
+		return c.scanner(c.cfg)
+	}
+
+	if !c.debug {
+		return discovery.ScanAll(c.cfg)
+	}
+
+	cfg := c.cfg
+	cfg.Logger = c.logf
+
+	entries, err := discovery.ScanAllVerbose(cfg)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]discovery.Cert, 0, len(entries))
+	for _, e := range entries {
+		if e.Error != nil {
+			continue
+		}
+		out = append(out, e.Cert)
+	}
+	return out, nil
 }
 
 func (c *Collector) bumpReadErr(domain string) {

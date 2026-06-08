@@ -1,8 +1,10 @@
 package discovery
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -126,6 +128,36 @@ func TestScanPathsFileAndDirectory(t *testing.T) {
 	}
 	if len(got) != 2 {
 		t.Fatalf("expected 2 certs, got %d: %#v", len(got), got)
+	}
+}
+
+func TestScanAllVerboseLogsExtraPaths(t *testing.T) {
+	root := t.TempDir()
+	notAfter := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	good := filepath.Join(root, "good.pem")
+	cert.WriteTestCert(t, good, notAfter, []string{"good.example.com"})
+
+	var logs []string
+	_, err := ScanAllVerbose(Config{
+		Paths: []string{good, "/does/not/exist.pem"},
+		Logger: func(format string, args ...any) {
+			logs = append(logs, fmt.Sprintf(format, args...))
+		},
+	})
+	if err != nil {
+		t.Fatalf("ScanAllVerbose: %v", err)
+	}
+
+	joined := strings.Join(logs, "\n")
+	for _, want := range []string{
+		"extra path scan start path=",
+		"extra path scan found root=",
+		"extra path scan done root=",
+		"extra path scan skip root=",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected log containing %q, got:\n%s", want, joined)
+		}
 	}
 }
 

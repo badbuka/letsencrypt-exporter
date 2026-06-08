@@ -55,7 +55,7 @@ func loadConfig(args []string) (config, error) {
 	fs.StringVar(&cfg.Hostname, "hostname", cfg.Hostname,
 		"Override for the hostname label; defaults to os.Hostname() (env: HOSTNAME)")
 	fs.BoolVar(&cfg.Debug, "debug", cfg.Debug,
-		"Enable debug mode (adds standard Go/process runtime metrics) (env: DEBUG)")
+		"Enable debug mode (runtime metrics and extra/recursive path scan logs) (env: DEBUG)")
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
 	}
@@ -101,6 +101,7 @@ func main() {
 		ExtraPaths:     extraPaths,
 		RecursivePaths: recursivePaths,
 		Hostname:       cfg.Hostname,
+		Debug:          cfg.Debug,
 		Logger: func(format string, a ...any) {
 			log.Printf("collector: "+format, a...)
 		},
@@ -130,8 +131,16 @@ func main() {
 		IdleTimeout:       30 * time.Second,
 	}
 
-	log.Printf("letsencrypt-exporter listening on %s, certbot=%s extra=%d recursive=%d",
-		addr, cfg.LetsencryptPath, len(extraPaths), len(recursivePaths))
+	log.Printf("letsencrypt-exporter listening on %s, certbot=%s extra=%d recursive=%d debug=%v",
+		addr, cfg.LetsencryptPath, len(extraPaths), len(recursivePaths), cfg.Debug)
+	if cfg.Debug {
+		for _, p := range extraPaths {
+			log.Printf("  extra path: %s", p)
+		}
+		for _, p := range recursivePaths {
+			log.Printf("  recursive path: %s", p)
+		}
+	}
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatalf("http server: %v", err)
 	}

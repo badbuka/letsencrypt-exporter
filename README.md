@@ -73,7 +73,7 @@ Flags override environment variables, environment variables override defaults.
 | `-cert-recursive-paths`   | `CERT_RECURSIVE_PATHS` | `""`               | Comma-separated roots for recursive PEM walk |
 | `-port`                   | `PORT`                 | `8622`             | TCP port for the HTTP server                 |
 | `-hostname`               | `HOSTNAME`             | `os.Hostname()`    | Override for the `hostname` metric label     |
-| `-debug`                  | `DEBUG`                | `false`            | Enable standard Go and process runtime metrics |
+| `-debug`                  | `DEBUG`                | `false`            | Runtime metrics plus extra/recursive path scan logs |
 
 `CERT_PATHS` accepts individual `.pem`, `.crt`, or `.cer` files or
 directories. For a directory, `cert.pem` / `cert.crt` / `cert.cer` is
@@ -111,6 +111,10 @@ docker run -d --rm -p 8622:8622 \
 - `GET /healthz` &mdash; liveness probe
 
 ### Debugging
+
+With `-debug` / `DEBUG=true`, each Prometheus scrape logs per-path discovery
+results for `CERT_PATHS` and `CERT_RECURSIVE_PATHS` (found certs, skips, and
+summaries). Configured paths are also listed at startup.
 
 If `letsencrypt_cert_read_errors_total` is climbing or no certificates show
 up at all, run a one-shot dump that lists every `live/<domain>` entry with
