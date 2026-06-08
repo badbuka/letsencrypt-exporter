@@ -6,8 +6,11 @@ certificates from certbot layouts and other configured PEM paths, then
 exposes their validity windows.
 
 Each metric is labeled with `hostname` (the OS hostname of the machine
-running the exporter) and `domain` (the primary name from the certificate:
-first DNS SAN, else common name, else a filesystem fallback).
+running the exporter), `domain` (the primary name from the certificate:
+first DNS SAN, else common name, else a filesystem fallback), and `lineage`
+(the certbot `live/<lineage>` directory name, or PEM basename for other
+sources). The `lineage` label disambiguates multiple certificates that share
+the same primary domain.
 
 ## Features
 
@@ -22,10 +25,10 @@ first DNS SAN, else common name, else a filesystem fallback).
 
 | Metric                                                | Labels                                | Meaning                                        |
 | ----------------------------------------------------- | ------------------------------------- | ---------------------------------------------- |
-| `letsencrypt_cert_not_after_seconds`                  | `hostname`, `domain`                  | `NotAfter` as Unix seconds                     |
-| `letsencrypt_cert_not_before_seconds`                 | `hostname`, `domain`                  | `NotBefore` as Unix seconds                    |
-| `letsencrypt_cert_expires_in_seconds`                 | `hostname`, `domain`                  | `NotAfter - now`; negative once expired        |
-| `letsencrypt_cert_info`                               | `hostname`, `domain`, `cn`, `issuer`, `serial`, `sans` | Constant `1`, descriptive labels |
+| `letsencrypt_cert_not_after_seconds`                  | `hostname`, `domain`, `lineage`       | `NotAfter` as Unix seconds                     |
+| `letsencrypt_cert_not_before_seconds`                 | `hostname`, `domain`, `lineage`       | `NotBefore` as Unix seconds                    |
+| `letsencrypt_cert_expires_in_seconds`                 | `hostname`, `domain`, `lineage`       | `NotAfter - now`; negative once expired        |
+| `letsencrypt_cert_info`                               | `hostname`, `domain`, `lineage`, `cn`, `issuer`, `serial`, `sans` | Constant `1`, descriptive labels |
 | `letsencrypt_cert_read_errors_total`                  | `hostname`, `domain`                  | Counter of read/parse failures per domain      |
 | `letsencrypt_exporter_last_scrape_timestamp_seconds`  | `hostname`                            | Wallclock of most recent scrape                |
 

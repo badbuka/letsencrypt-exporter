@@ -38,7 +38,7 @@ type Options struct {
 	Hostname string
 
 	// ConstLabels are merged into every metric on top of the built-in
-	// {hostname,domain} pair. Useful for things like {"env":"prod"}.
+	// {hostname,domain,lineage} triple. Useful for things like {"env":"prod"}.
 	ConstLabels prometheus.Labels
 
 	// Scanner overrides the default discovery.ScanAll. Intended for tests.
@@ -123,22 +123,22 @@ func New(opts Options) *Collector {
 		notAfter: prometheus.NewDesc(
 			ns+"_cert_not_after_seconds",
 			"Certificate NotAfter expressed as seconds since the Unix epoch.",
-			[]string{"domain"}, hostLabels,
+			[]string{"domain", "lineage"}, hostLabels,
 		),
 		notBefore: prometheus.NewDesc(
 			ns+"_cert_not_before_seconds",
 			"Certificate NotBefore expressed as seconds since the Unix epoch.",
-			[]string{"domain"}, hostLabels,
+			[]string{"domain", "lineage"}, hostLabels,
 		),
 		expiresIn: prometheus.NewDesc(
 			ns+"_cert_expires_in_seconds",
 			"Seconds until the certificate's NotAfter; negative once expired.",
-			[]string{"domain"}, hostLabels,
+			[]string{"domain", "lineage"}, hostLabels,
 		),
 		info: prometheus.NewDesc(
 			ns+"_cert_info",
 			"Constant 1 with descriptive certificate labels.",
-			[]string{"domain", "cn", "issuer", "serial", "sans"}, hostLabels,
+			[]string{"domain", "lineage", "cn", "issuer", "serial", "sans"}, hostLabels,
 		),
 		scrapeTS: prometheus.NewDesc(
 			"letsencrypt_exporter_last_scrape_timestamp_seconds",
@@ -191,22 +191,24 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 		}
 
 		domain := certpkg.PrimaryDomain(parsed, cert.FallbackID)
+		lineage := cert.FallbackID
 
 		ch <- prometheus.MustNewConstMetric(
 			c.notAfter, prometheus.GaugeValue,
-			float64(parsed.NotAfter.Unix()), domain,
+			float64(parsed.NotAfter.Unix()), domain, lineage,
 		)
 		ch <- prometheus.MustNewConstMetric(
 			c.notBefore, prometheus.GaugeValue,
-			float64(parsed.NotBefore.Unix()), domain,
+			float64(parsed.NotBefore.Unix()), domain, lineage,
 		)
 		ch <- prometheus.MustNewConstMetric(
 			c.expiresIn, prometheus.GaugeValue,
-			parsed.NotAfter.Sub(now).Seconds(), domain,
+			parsed.NotAfter.Sub(now).Seconds(), domain, lineage,
 		)
 		ch <- prometheus.MustNewConstMetric(
 			c.info, prometheus.GaugeValue, 1,
 			domain,
+			lineage,
 			parsed.Subject.CommonName,
 			parsed.Issuer.CommonName,
 			parsed.SerialNumber.Text(16),

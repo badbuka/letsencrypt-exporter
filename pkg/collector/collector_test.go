@@ -37,7 +37,7 @@ func TestCollectorMetrics(t *testing.T) {
 	expected := `
 # HELP letsencrypt_cert_not_after_seconds Certificate NotAfter expressed as seconds since the Unix epoch.
 # TYPE letsencrypt_cert_not_after_seconds gauge
-letsencrypt_cert_not_after_seconds{domain="example.com",hostname="edge-01"} 1.893456e+09
+letsencrypt_cert_not_after_seconds{domain="example.com",hostname="edge-01",lineage="example.com"} 1.893456e+09
 `
 	if err := testutil.GatherAndCompare(reg, strings.NewReader(expected), "letsencrypt_cert_not_after_seconds"); err != nil {
 		t.Fatalf("not_after mismatch: %v", err)
@@ -46,7 +46,7 @@ letsencrypt_cert_not_after_seconds{domain="example.com",hostname="edge-01"} 1.89
 	expectedExpires := `
 # HELP letsencrypt_cert_expires_in_seconds Seconds until the certificate's NotAfter; negative once expired.
 # TYPE letsencrypt_cert_expires_in_seconds gauge
-letsencrypt_cert_expires_in_seconds{domain="example.com",hostname="edge-01"} 3.1536e+07
+letsencrypt_cert_expires_in_seconds{domain="example.com",hostname="edge-01",lineage="example.com"} 3.1536e+07
 `
 	if err := testutil.GatherAndCompare(reg, strings.NewReader(expectedExpires), "letsencrypt_cert_expires_in_seconds"); err != nil {
 		t.Fatalf("expires_in mismatch: %v", err)
@@ -76,7 +76,7 @@ func TestCollectorDomainFromFirstSAN(t *testing.T) {
 	expected := `
 # HELP letsencrypt_cert_not_after_seconds Certificate NotAfter expressed as seconds since the Unix epoch.
 # TYPE letsencrypt_cert_not_after_seconds gauge
-letsencrypt_cert_not_after_seconds{domain="www.example.com",hostname="edge-01"} 1.893456e+09
+letsencrypt_cert_not_after_seconds{domain="www.example.com",hostname="edge-01",lineage="example.com"} 1.893456e+09
 `
 	if err := testutil.GatherAndCompare(reg, strings.NewReader(expected), "letsencrypt_cert_not_after_seconds"); err != nil {
 		t.Fatalf("domain should come from first SAN: %v", err)
@@ -100,7 +100,7 @@ func TestCollectorFlatPEMPath(t *testing.T) {
 	expected := `
 # HELP letsencrypt_cert_not_after_seconds Certificate NotAfter expressed as seconds since the Unix epoch.
 # TYPE letsencrypt_cert_not_after_seconds gauge
-letsencrypt_cert_not_after_seconds{domain="custom.example.com",hostname="edge-01"} 1.893456e+09
+letsencrypt_cert_not_after_seconds{domain="custom.example.com",hostname="edge-01",lineage="custom.pem"} 1.893456e+09
 `
 	if err := testutil.GatherAndCompare(reg, strings.NewReader(expected), "letsencrypt_cert_not_after_seconds"); err != nil {
 		t.Fatalf("flat PEM path mismatch: %v", err)
@@ -119,6 +119,33 @@ func TestCollectorHandlesMissingRoot(t *testing.T) {
 	}
 	if got := testutil.CollectAndCount(c, "letsencrypt_exporter_last_scrape_timestamp_seconds"); got != 1 {
 		t.Errorf("scrape timestamp must always be emitted, got %d", got)
+	}
+}
+
+func TestCollectorDuplicatePrimaryDomain(t *testing.T) {
+	root := t.TempDir()
+	oldExpiry := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	newExpiry := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	cert.WriteTestCert(t,
+		filepath.Join(root, "live", "wildcard-old", "cert.pem"),
+		oldExpiry,
+		[]string{"*.uzumid.uz"},
+	)
+	cert.WriteTestCert(t,
+		filepath.Join(root, "live", "wildcard-new", "cert.pem"),
+		newExpiry,
+		[]string{"*.uzumid.uz"},
+	)
+
+	c := New(Options{
+		CertbotPath: root,
+		Hostname:    "edge-01",
+	})
+	reg := prometheus.NewPedanticRegistry()
+	reg.MustRegister(c)
+
+	if got := testutil.CollectAndCount(c, "letsencrypt_cert_not_after_seconds"); got != 2 {
+		t.Fatalf("expected 2 series for duplicate primary domain, got %d", got)
 	}
 }
 
