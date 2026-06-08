@@ -75,13 +75,17 @@ Flags override environment variables, environment variables override defaults.
 | `-hostname`               | `HOSTNAME`             | `os.Hostname()`    | Override for the `hostname` metric label     |
 | `-debug`                  | `DEBUG`                | `false`            | Enable standard Go and process runtime metrics |
 
-`CERT_PATHS` accepts individual `.pem`/`.crt` files or directories. For a
-directory, `cert.pem` is preferred (certbot-style); otherwise every
-`.pem`/`.crt` file in that directory is scanned (non-recursive).
+`CERT_PATHS` accepts individual `.pem`, `.crt`, or `.cer` files or
+directories. For a directory, `cert.pem` / `cert.crt` / `cert.cer` is
+preferred (certbot-style); otherwise every matching certificate file in that
+directory and in its immediate subdirectories is scanned (one level deep,
+non-recursive beyond that). PEM and DER encodings are supported. Use this
+for layouts like `certs/<domain>/fullchain.pem` or pointing directly at
+`live/`.
 
 `CERT_RECURSIVE_PATHS` walks each root recursively for `.pem`, `.crt`, and
-`.cer` files. Private keys (`privkey.pem`, `*-key.pem`) and non-certificate
-PEM blocks are skipped. Avoid pointing recursive roots at certbot `archive/`
+`.cer` files. Private keys (`privkey.pem`, `*-key.pem`) and files that do
+not contain a parseable X.509 certificate are skipped. Avoid pointing recursive roots at certbot `archive/`
 when `LETSENCRYPT_PATH` is already configured — results are deduplicated by
 file path, but overlapping scans waste I/O.
 

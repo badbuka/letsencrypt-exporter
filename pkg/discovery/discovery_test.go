@@ -182,6 +182,102 @@ func TestScanAllDedupesByCertPath(t *testing.T) {
 	}
 }
 
+func TestScanPathsNestedSubdirectories(t *testing.T) {
+	root := t.TempDir()
+	notAfter := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	cert.WriteTestCert(t,
+		filepath.Join(root, "example.com", "fullchain.pem"),
+		notAfter,
+		[]string{"example.com"},
+	)
+	cert.WriteTestCert(t,
+		filepath.Join(root, "other.com", "cert.pem"),
+		notAfter,
+		[]string{"other.com"},
+	)
+
+	got, err := ScanAll(Config{Paths: []string{root}})
+	if err != nil {
+		t.Fatalf("ScanAll: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 nested certs, got %d: %#v", len(got), got)
+	}
+}
+
+func TestScanPathsAllCertExtensions(t *testing.T) {
+	root := t.TempDir()
+	notAfter := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	cert.WriteTestCert(t, filepath.Join(root, "edge.pem"), notAfter, []string{"edge.example.com"})
+	cert.WriteTestCert(t, filepath.Join(root, "edge.crt"), notAfter, []string{"crt.example.com"})
+	cert.WriteTestCert(t, filepath.Join(root, "edge.cer"), notAfter, []string{"cer-pem.example.com"})
+	cert.WriteTestCertDER(t, filepath.Join(root, "der.cer"), notAfter, []string{"cer-der.example.com"})
+
+	got, err := ScanAll(Config{Paths: []string{root}})
+	if err != nil {
+		t.Fatalf("ScanAll: %v", err)
+	}
+	if len(got) != 4 {
+		t.Fatalf("expected 4 certs across .pem/.crt/.cer, got %d: %#v", len(got), got)
+	}
+}
+
+func TestScanPathsPreferredCertCRT(t *testing.T) {
+	root := t.TempDir()
+	notAfter := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	dir := filepath.Join(root, "site")
+	cert.WriteTestCert(t, filepath.Join(dir, "cert.crt"), notAfter, []string{"site.example.com"})
+	cert.WriteTestCert(t, filepath.Join(dir, "other.pem"), notAfter, []string{"other.example.com"})
+
+	got, err := ScanAll(Config{Paths: []string{dir}})
+	if err != nil {
+		t.Fatalf("ScanAll: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected preferred cert.crt only, got %d: %#v", len(got), got)
+	}
+	if got[0].FallbackID != "site" {
+		t.Fatalf("unexpected fallback: %q", got[0].FallbackID)
+	}
+}
+
+func TestScanRecursiveDERCer(t *testing.T) {
+	root := t.TempDir()
+	notAfter := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	cert.WriteTestCertDER(t, filepath.Join(root, "nested", "leaf.cer"), notAfter, []string{"leaf.example.com"})
+
+	got, err := ScanAll(Config{RecursiveRoots: []string{root}})
+	if err != nil {
+		t.Fatalf("ScanAll: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 DER .cer cert, got %d: %#v", len(got), got)
+	}
+}
+
+func TestScanPathsCertbotLiveLayout(t *testing.T) {
+	root := t.TempDir()
+	notAfter := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	cert.WriteTestCert(t,
+		filepath.Join(root, "live", "example.com", "cert.pem"),
+		notAfter,
+		[]string{"example.com"},
+	)
+
+	got, err := ScanAll(Config{Paths: []string{filepath.Join(root, "live")}})
+	if err != nil {
+		t.Fatalf("ScanAll: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 cert from live/ via CERT_PATHS, got %d: %#v", len(got), got)
+	}
+	if got[0].FallbackID != "example.com" {
+		t.Fatalf("unexpected fallback: %q", got[0].FallbackID)
+	}
+}
+
 func TestScanAllRecursiveOnlyNonCertbot(t *testing.T) {
 	root := t.TempDir()
 	notAfter := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)

@@ -5,9 +5,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/badbuka/letsencrypt-exporter/pkg/cert"
 )
 
 var certFileSuffixes = []string{".pem", ".crt", ".cer"}
+
+var preferredCertBasenames = []string{"cert.pem", "cert.crt", "cert.cer"}
 
 // entryError returns a single verbose entry carrying err. The outer error is
 // always nil because ScanAllVerbose reports per-path failures in Entry.Error.
@@ -44,6 +48,9 @@ func scanOnePathVerbose(path string) ([]Entry, error) {
 		if !isCertFilename(path) {
 			return entryError(filepath.Base(path), fmt.Errorf("not a certificate file"))
 		}
+		if !cert.LooksLikeCertificateFile(path) {
+			return entryError(filepath.Base(path), fmt.Errorf("not a certificate file"))
+		}
 		resolved, resolveErr := resolveCertPath(path)
 		if resolveErr != nil {
 			return entryError(filepath.Base(path), resolveErr)
@@ -63,26 +70,48 @@ func scanDirNonRecursive(dir string) ([]Entry, error) {
 		return nil, fmt.Errorf("read %s: %w", dir, err)
 	}
 
-	certbotPath := filepath.Join(dir, "cert.pem")
-	if _, err := os.Stat(certbotPath); err == nil {
-		resolved, rerr := resolveCertPath(certbotPath)
+	var brokenPreferred *Entry
+	for _, name := range preferredCertBasenames {
+		preferredPath := filepath.Join(dir, name)
+		if _, err := os.Stat(preferredPath); err != nil {
+			continue
+		}
+		resolved, rerr := resolveCertPath(preferredPath)
 		entry := Entry{Cert: Cert{FallbackID: filepath.Base(dir)}}
 		if rerr != nil {
 			entry.Error = rerr
 		} else {
 			entry.Cert.CertPath = resolved
 		}
-		return []Entry{entry}, nil
+		if entry.Error == nil {
+			return []Entry{entry}, nil
+		}
+		brokenPreferred = &entry
+		break
 	}
 
 	var out []Entry
+	if brokenPreferred != nil {
+		out = append(out, *brokenPreferred)
+	}
 	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
 		name := e.Name()
 		full := filepath.Join(dir, name)
+		if e.IsDir() {
+			subEntries, subErr := scanOnePathVerbose(full)
+			if subErr != nil {
+				return nil, subErr
+			}
+			out = append(out, subEntries...)
+			continue
+		}
+		if isPreferredCertBasename(name) {
+			continue
+		}
 		if !isCertFilename(full) || isPrivateKeyFilename(name) {
+			continue
+		}
+		if !cert.LooksLikeCertificateFile(full) {
 			continue
 		}
 		resolved, rerr := resolveCertPath(full)
@@ -101,6 +130,16 @@ func isCertFilename(path string) bool {
 	lower := strings.ToLower(path)
 	for _, suffix := range certFileSuffixes {
 		if strings.HasSuffix(lower, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+func isPreferredCertBasename(name string) bool {
+	lower := strings.ToLower(name)
+	for _, preferred := range preferredCertBasenames {
+		if lower == preferred {
 			return true
 		}
 	}

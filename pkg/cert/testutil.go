@@ -49,3 +49,34 @@ func WriteTestCert(t *testing.T, path string, notAfter time.Time, dnsNames []str
 		t.Fatal(err)
 	}
 }
+
+// WriteTestCertDER writes a self-signed DER-encoded certificate to path.
+func WriteTestCertDER(t *testing.T, path string, notAfter time.Time, dnsNames []string) {
+	t.Helper()
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cn := ""
+	if len(dnsNames) > 0 {
+		cn = dnsNames[0]
+	}
+	tpl := &x509.Certificate{
+		SerialNumber: big.NewInt(43),
+		Subject:      pkix.Name{CommonName: cn},
+		Issuer:       pkix.Name{CommonName: "Test CA"},
+		NotBefore:    notAfter.Add(-90 * 24 * time.Hour),
+		NotAfter:     notAfter,
+		DNSNames:     dnsNames,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tpl, tpl, &priv.PublicKey, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, der, 0o644); err != nil { //nolint:gosec // G306: test fixture
+		t.Fatal(err)
+	}
+}

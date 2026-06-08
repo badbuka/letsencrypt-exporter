@@ -80,6 +80,20 @@ func TestLoad(t *testing.T) {
 	}
 }
 
+func TestLoadDER(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.cer")
+	notAfter := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	WriteTestCertDER(t, path, notAfter, []string{"der.example.com"})
+
+	parsed, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load DER: %v", err)
+	}
+	if parsed.Subject.CommonName != "der.example.com" {
+		t.Fatalf("unexpected CN: %q", parsed.Subject.CommonName)
+	}
+}
+
 func TestLoadRejectsNonCertificatePEM(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "key.pem")
 	if err := os.WriteFile(path, []byte("-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n"), 0o644); err != nil {

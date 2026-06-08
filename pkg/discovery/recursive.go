@@ -1,12 +1,13 @@
 package discovery
 
 import (
-	"encoding/pem"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/badbuka/letsencrypt-exporter/pkg/cert"
 )
 
 func scanRecursiveVerbose(roots []string) ([]Entry, error) {
@@ -49,7 +50,7 @@ func scanOneRecursiveVerbose(root string) ([]Entry, error) {
 		if !isCertFilename(path) || isPrivateKeyFilename(name) {
 			return nil
 		}
-		if !isCertificatePEM(path) {
+		if !cert.LooksLikeCertificateFile(path) {
 			return nil
 		}
 		resolved, rerr := resolveCertPath(path)
@@ -76,10 +77,10 @@ func scanOneRecursiveVerbose(root string) ([]Entry, error) {
 			Error: fmt.Errorf("not a certificate file"),
 		}}, nil
 	}
-	if !isCertificatePEM(root) {
+	if !cert.LooksLikeCertificateFile(root) {
 		return []Entry{{
 			Cert:  Cert{FallbackID: filepath.Base(root)},
-			Error: fmt.Errorf("no CERTIFICATE PEM block"),
+			Error: fmt.Errorf("not a certificate file"),
 		}}, nil
 	}
 	resolved, rerr := resolveCertPath(root)
@@ -98,15 +99,6 @@ func isPrivateKeyFilename(name string) bool {
 		return true
 	}
 	return false
-}
-
-func isCertificatePEM(path string) bool {
-	raw, err := os.ReadFile(path) //nolint:gosec // G304: discovery reads operator-configured cert paths
-	if err != nil {
-		return false
-	}
-	block, _ := pem.Decode(raw)
-	return block != nil && block.Type == "CERTIFICATE"
 }
 
 func resolveCertPath(path string) (string, error) {
