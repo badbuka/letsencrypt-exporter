@@ -61,8 +61,8 @@ type Options struct {
 
 // Collector implements prometheus.Collector.
 type Collector struct {
-	cfg      discovery.Config
-	hostname string
+	cfg              discovery.Config
+	hostname         string
 	scanner          func(discovery.Config) ([]discovery.Cert, error)
 	scannerIsDefault bool
 	debug            bool
@@ -123,8 +123,8 @@ func New(opts Options) *Collector {
 	}
 
 	return &Collector{
-		cfg:      cfg,
-		hostname: host,
+		cfg:              cfg,
+		hostname:         host,
 		scanner:          scanner,
 		scannerIsDefault: scannerIsDefault,
 		debug:            opts.Debug,
