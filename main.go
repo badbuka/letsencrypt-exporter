@@ -96,7 +96,7 @@ func main() {
 		reg.MustRegister(collectors.NewGoCollector())
 		reg.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	}
-	collector.MustRegister(reg, collector.Options{
+	reg.MustRegister(collector.New(collector.Options{
 		CertbotPath:    cfg.LetsencryptPath,
 		ExtraPaths:     extraPaths,
 		RecursivePaths: recursivePaths,
@@ -105,7 +105,7 @@ func main() {
 		Logger: func(format string, a ...any) {
 			log.Printf("collector: "+format, a...)
 		},
-	})
+	}))
 
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{Registry: reg}))

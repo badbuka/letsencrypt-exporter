@@ -38,9 +38,9 @@ func TestScanCertbot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := Scan(root)
+	got, err := ScanAll(Config{CertbotRoot: root})
 	if err != nil {
-		t.Fatalf("Scan: %v", err)
+		t.Fatalf("ScanAll: %v", err)
 	}
 	if len(got) != 2 {
 		t.Fatalf("expected 2 certs, got %d: %#v", len(got), got)
@@ -56,7 +56,7 @@ func TestScanCertbot(t *testing.T) {
 }
 
 func TestScanMissingRoot(t *testing.T) {
-	got, err := Scan(filepath.Join(t.TempDir(), "does-not-exist"))
+	got, err := ScanAll(Config{CertbotRoot: filepath.Join(t.TempDir(), "does-not-exist")})
 	if err != nil {
 		t.Fatalf("expected nil error for missing root, got %v", err)
 	}
@@ -65,7 +65,7 @@ func TestScanMissingRoot(t *testing.T) {
 	}
 }
 
-func TestScanVerboseReportsSkips(t *testing.T) {
+func TestScanAllVerboseReportsSkips(t *testing.T) {
 	root := t.TempDir()
 	live := filepath.Join(root, "live")
 	if err := os.MkdirAll(live, 0o755); err != nil {
@@ -88,9 +88,9 @@ func TestScanVerboseReportsSkips(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	entries, err := ScanVerbose(root)
+	entries, err := ScanAllVerbose(Config{CertbotRoot: root})
 	if err != nil {
-		t.Fatalf("ScanVerbose: %v", err)
+		t.Fatalf("ScanAllVerbose: %v", err)
 	}
 	if len(entries) != 3 {
 		t.Fatalf("expected 3 entries, got %d: %#v", len(entries), entries)

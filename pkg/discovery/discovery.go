@@ -45,16 +45,6 @@ type Entry struct {
 	Error error
 }
 
-// Scan walks <root>/live/* via ScanAll for library backward compatibility.
-func Scan(root string) ([]Cert, error) {
-	return ScanAll(Config{CertbotRoot: root})
-}
-
-// ScanVerbose is ScanAllVerbose for a single certbot root.
-func ScanVerbose(root string) ([]Entry, error) {
-	return ScanAllVerbose(Config{CertbotRoot: root})
-}
-
 // ScanAll merges certificates from all enabled discovery sources.
 func ScanAll(cfg Config) ([]Cert, error) {
 	entries, err := ScanAllVerbose(cfg)

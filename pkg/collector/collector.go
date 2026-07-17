@@ -41,9 +41,6 @@ type Options struct {
 	// {hostname,domain,lineage} triple. Useful for things like {"env":"prod"}.
 	ConstLabels prometheus.Labels
 
-	// Scanner overrides the default discovery.ScanAll. Intended for tests.
-	Scanner func(cfg discovery.Config) ([]discovery.Cert, error)
-
 	// Now overrides the time source. Intended for tests.
 	Now func() time.Time
 
@@ -61,13 +58,11 @@ type Options struct {
 
 // Collector implements prometheus.Collector.
 type Collector struct {
-	cfg              discovery.Config
-	hostname         string
-	scanner          func(discovery.Config) ([]discovery.Cert, error)
-	scannerIsDefault bool
-	debug            bool
-	now              func() time.Time
-	logf             func(format string, args ...any)
+	cfg      discovery.Config
+	hostname string
+	debug    bool
+	now      func() time.Time
+	logf     func(format string, args ...any)
 
 	notAfter    *prometheus.Desc
 	notBefore   *prometheus.Desc
@@ -102,11 +97,6 @@ func New(opts Options) *Collector {
 		RecursiveRoots: opts.RecursivePaths,
 	}
 
-	scanner := opts.Scanner
-	scannerIsDefault := scanner == nil
-	if scanner == nil {
-		scanner = discovery.ScanAll
-	}
 	now := opts.Now
 	if now == nil {
 		now = time.Now
@@ -123,13 +113,11 @@ func New(opts Options) *Collector {
 	}
 
 	return &Collector{
-		cfg:              cfg,
-		hostname:         host,
-		scanner:          scanner,
-		scannerIsDefault: scannerIsDefault,
-		debug:            opts.Debug,
-		now:              now,
-		logf:             logf,
+		cfg:      cfg,
+		hostname: host,
+		debug:    opts.Debug,
+		now:      now,
+		logf:     logf,
 		notAfter: prometheus.NewDesc(
 			ns+"_cert_not_after_seconds",
 			"Certificate NotAfter expressed as seconds since the Unix epoch.",
@@ -162,14 +150,6 @@ func New(opts Options) *Collector {
 		),
 		readErrs: make(map[string]float64),
 	}
-}
-
-// MustRegister is a convenience helper for callers that already manage a
-// registry. It panics if registration fails.
-func MustRegister(reg prometheus.Registerer, opts Options) *Collector {
-	c := New(opts)
-	reg.MustRegister(c)
-	return c
 }
 
 // Describe implements prometheus.Collector.
@@ -240,29 +220,11 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 }
 
 func (c *Collector) discoverCerts() ([]discovery.Cert, error) {
-	if !c.scannerIsDefault {
-		return c.scanner(c.cfg)
-	}
-
-	if !c.debug {
-		return discovery.ScanAll(c.cfg)
-	}
-
 	cfg := c.cfg
-	cfg.Logger = c.logf
-
-	entries, err := discovery.ScanAllVerbose(cfg)
-	if err != nil {
-		return nil, err
+	if c.debug {
+		cfg.Logger = c.logf
 	}
-	out := make([]discovery.Cert, 0, len(entries))
-	for _, e := range entries {
-		if e.Error != nil {
-			continue
-		}
-		out = append(out, e.Cert)
-	}
-	return out, nil
+	return discovery.ScanAll(cfg)
 }
 
 func (c *Collector) bumpReadErr(domain string) {

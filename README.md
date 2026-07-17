@@ -198,11 +198,11 @@ import (
 )
 
 func main() {
-    collector.MustRegister(prometheus.DefaultRegisterer, collector.Options{
+    prometheus.MustRegister(collector.New(collector.Options{
         CertbotPath: "/etc/letsencrypt",
         ExtraPaths:  []string{"/etc/nginx/certs"},
         ConstLabels: prometheus.Labels{"env": "prod"},
-    })
+    }))
     http.Handle("/metrics", promhttp.Handler())
     http.ListenAndServe(":9090", nil)
 }
@@ -218,8 +218,6 @@ certs, err := discovery.ScanAll(discovery.Config{
     CertbotRoot: "/etc/letsencrypt",
     Paths:       []string{"/etc/nginx/certs"},
 })
-
-// discovery.Scan(root) remains as a certbot-only shorthand.
 ```
 
 ## Development
