@@ -6,7 +6,7 @@
 (`not_before`, `not_after`, `expires_in`) for every cert found under a certbot
 root plus operator-configured extra/recursive paths. Also usable as a Go library.
 
-- Module: `github.com/badbuka/letsencrypt-exporter`, Go 1.26.4 (pinned in go.mod, CI, Docker)
+- Module: `github.com/badbuka/letsencrypt-exporter`, Go 1.26.5 (pinned in go.mod, CI, Docker)
 - Direct deps: `kelseyhightower/envconfig` (env config), `prometheus/client_golang` (metrics/HTTP)
 - Binary subcommands: default = serve HTTP on :8622; `debug` = one-shot discovery dump (debug.go)
 
@@ -51,7 +51,7 @@ make all     # lint test build
 ```
 
 Run: `go run .` (serves :8622, `/metrics` + `/healthz`) or `go run . debug` (discovery dump).
-Docker: two-stage `golang:1.26.4-alpine` → `gcr.io/distroless/static-debian12`, `CGO_ENABLED=0`.
+Docker: two-stage `golang:1.26.5-alpine` → `gcr.io/distroless/static-debian12`, `CGO_ENABLED=0`.
 
 ## Code Conventions & Common Patterns
 
@@ -80,7 +80,7 @@ Docker: two-stage `golang:1.26.4-alpine` → `gcr.io/distroless/static-debian12`
 
 ## Runtime/Tooling Preferences
 
-- **Go 1.26.4 exactly** — keep go.mod, CI `setup-go`, and Docker base image in sync when bumping.
+- **Go 1.26.5 exactly** — keep go.mod, CI `setup-go`, and Docker base image in sync when bumping.
 - golangci-lint **v2** (CI pins v2.11.4); `make fmt` uses `golangci-lint fmt`, not bare gofmt.
 - Static binary (`CGO_ENABLED=0`, `-trimpath -ldflags="-s -w"`) on distroless — no shell/libc at runtime.
 - Container runs as root by default: certbot sets `live/`/`archive/` to `0700 root:root` and `cert.pem`

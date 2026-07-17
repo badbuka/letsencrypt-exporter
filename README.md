@@ -222,7 +222,7 @@ certs, err := discovery.ScanAll(discovery.Config{
 
 ## Development
 
-Requires Go 1.26.4 and [golangci-lint](https://golangci-lint.run/) v2.x.
+Requires Go 1.26.5 and [golangci-lint](https://golangci-lint.run/) v2.x.
 
 ```bash
 make lint    # golangci-lint run
